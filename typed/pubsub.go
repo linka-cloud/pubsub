@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-var wgPool = sync.Pool{New: func() interface{} { return new(sync.WaitGroup) }}
+var wgPool = sync.Pool{New: func() any { return new(sync.WaitGroup) }}
 
 // NewPublisher creates a new pub/sub publisher to broadcast messages.
 // The duration is used as the send timeout as to not block the publisher publishing

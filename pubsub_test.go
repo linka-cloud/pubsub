@@ -20,7 +20,7 @@ func TestSendToOneSub(t *testing.T) {
 
 func TestSendToMultipleSubs(t *testing.T) {
 	p := NewPublisher(100*time.Millisecond, 10)
-	var subs []chan interface{}
+	var subs []chan any
 	subs = append(subs, p.Subscribe(), p.Subscribe(), p.Subscribe())
 
 	p.Publish("hi")
@@ -52,7 +52,7 @@ func TestEvictOneSub(t *testing.T) {
 
 func TestClosePublisher(t *testing.T) {
 	p := NewPublisher(100*time.Millisecond, 10)
-	var subs []chan interface{}
+	var subs []chan any
 	subs = append(subs, p.Subscribe(), p.Subscribe(), p.Subscribe())
 	p.Close()
 
@@ -66,7 +66,7 @@ func TestClosePublisher(t *testing.T) {
 const sampleText = "test"
 
 type testSubscriber struct {
-	dataCh chan interface{}
+	dataCh chan any
 	ch     chan error
 }
 
