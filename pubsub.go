@@ -6,6 +6,7 @@ import (
 )
 
 var wgPool = sync.Pool{New: func() any { return new(sync.WaitGroup) }}
+var timerPool = sync.Pool{New: func() any { return time.NewTimer(0) }}
 
 // NewPublisher creates a new pub/sub publisher to broadcast messages.
 // The duration is used as the send timeout as to not block the publisher publishing
@@ -81,11 +82,18 @@ func (p *publisher) Publish(v any) {
 		p.m.RUnlock()
 		return
 	}
+	if p.timeout <= 0 {
+		for sub, topic := range p.subscribers {
+			p.sendTopic(sub, topic, v)
+		}
+		p.m.RUnlock()
+		return
+	}
 
 	wg := wgPool.Get().(*sync.WaitGroup)
 	for sub, topic := range p.subscribers {
 		wg.Add(1)
-		go p.sendTopic(sub, topic, v, wg)
+		go p.sendTopicTimeout(sub, topic, v, wg)
 	}
 	wg.Wait()
 	wgPool.Put(wg)
@@ -102,28 +110,51 @@ func (p *publisher) Close() {
 	p.m.Unlock()
 }
 
-func (p *publisher) sendTopic(sub subscriber, topic topicFunc, v any, wg *sync.WaitGroup) {
+func (p *publisher) sendTopic(sub subscriber, topic topicFunc, v any) {
+	if topic != nil && !topic(v) {
+		return
+	}
+	select {
+	case sub <- v:
+	default:
+	}
+}
+
+func (p *publisher) sendTopicTimeout(sub subscriber, topic topicFunc, v any, wg *sync.WaitGroup) {
 	defer wg.Done()
 	if topic != nil && !topic(v) {
 		return
 	}
 
-	// send under a select as to not block if the receiver is unavailable
-	if p.timeout > 0 {
-		timeout := time.NewTimer(p.timeout)
-		defer timeout.Stop()
-
-		select {
-		case sub <- v:
-		case <-timeout.C:
-		}
-		return
-	}
+	timeout := takeTimer(p.timeout)
+	defer putTimer(timeout)
 
 	select {
 	case sub <- v:
-	default:
+	case <-timeout.C:
 	}
+}
+
+func takeTimer(d time.Duration) *time.Timer {
+	t := timerPool.Get().(*time.Timer)
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+	return t
+}
+
+func putTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	timerPool.Put(t)
 }
 
 type Publisher interface {

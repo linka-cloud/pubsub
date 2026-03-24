@@ -2,6 +2,7 @@ package pubsub // import "github.com/docker/docker/pkg/pubsub"
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -111,27 +112,93 @@ func TestPubSubRace(t *testing.T) {
 	}
 }
 
-func BenchmarkPubSub(b *testing.B) {
+func BenchmarkPubSubPublishNoSubscribers(b *testing.B) {
+	p := NewPublisher[string](0, 1024)
+	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		p := NewPublisher[string](0, 1024)
-		var subs []*testSubscriber
-		for j := 0; j < 50; j++ {
-			subs = append(subs, newTestSubscriber(p))
-		}
-		b.StartTimer()
-		for j := 0; j < 1000; j++ {
-			p.Publish(sampleText)
-		}
-		time.AfterFunc(1*time.Second, func() {
-			for _, s := range subs {
-				p.Evict(s.dataCh)
+		p.Publish(sampleText)
+	}
+}
+
+func BenchmarkPubSubPublishSubscribers(b *testing.B) {
+	for _, n := range []int{1, 10, 50, 100} {
+		b.Run(fmt.Sprintf("subs=%d", n), func(b *testing.B) {
+			p := NewPublisher[string](0, 1024)
+			subs := make([]chan string, 0, n)
+			for i := 0; i < n; i++ {
+				subs = append(subs, p.Subscribe())
 			}
+
+			var wg sync.WaitGroup
+			for _, sub := range subs {
+				wg.Add(1)
+				go func(ch chan string) {
+					defer wg.Done()
+					for range ch {
+					}
+				}(sub)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				p.Publish(sampleText)
+			}
+			b.StopTimer()
+
+			p.Close()
+			wg.Wait()
 		})
-		for _, s := range subs {
-			if err := s.Wait(); err != nil {
-				b.Fatal(err)
+	}
+}
+
+func BenchmarkPubSubPublishTopic(b *testing.B) {
+	p := NewPublisher[string](0, 1024)
+	accepted := p.SubscribeTopic(func(v string) bool {
+		return len(v) > 0
+	})
+	rejected := p.SubscribeTopic(func(v string) bool {
+		return len(v) == 0
+	})
+
+	var wg sync.WaitGroup
+	for _, sub := range []chan string{accepted, rejected} {
+		wg.Add(1)
+		go func(ch chan string) {
+			defer wg.Done()
+			for range ch {
 			}
-		}
+		}(sub)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p.Publish(sampleText)
+	}
+	b.StopTimer()
+
+	p.Close()
+	wg.Wait()
+}
+
+func BenchmarkPubSubPublishTimeout(b *testing.B) {
+	for _, n := range []int{1, 10, 50} {
+		b.Run(fmt.Sprintf("subs=%d", n), func(b *testing.B) {
+			p := NewPublisher[string](time.Nanosecond, 0)
+			for i := 0; i < n; i++ {
+				p.Subscribe()
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				p.Publish(sampleText)
+			}
+			b.StopTimer()
+
+			p.Close()
+		})
 	}
 }
